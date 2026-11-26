@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import { Flower2, ShieldCheck } from 'lucide-react';
 import { AuthForm } from './components/AuthForm';
 import { Dashboard } from './components/Dashboard';
+import { PasswordRecoveryForm } from './components/PasswordRecoveryForm';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { tw } from './lib/tw';
 function App() {
     const [session, setSession] = useState(null);
     const [checkingSession, setCheckingSession] = useState(true);
+    const [passwordRecovery, setPasswordRecovery] = useState(
+        () => new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery',
+    );
     const client = supabase;
     useEffect(() => {
         if (!client)
@@ -17,7 +21,11 @@ function App() {
             setSession(data.session);
             setCheckingSession(false);
         });
-        const { data: { subscription } } = client.auth.onAuthStateChange((_event, nextSession) => {
+        const { data: { subscription } } = client.auth.onAuthStateChange((event, nextSession) => {
+            if (event === 'PASSWORD_RECOVERY')
+                setPasswordRecovery(true);
+            else if (event === 'SIGNED_OUT')
+                setPasswordRecovery(false);
             setSession(nextSession);
         });
         return () => subscription.unsubscribe();
@@ -45,6 +53,8 @@ function App() {
     if (session && !session.user.email) {
         return <main className={tw("loading-screen")}><div className={tw("error-card")}><h2>Email sign-in required</h2><p>This phone-only account cannot sign in to the email-based app. Sign out and create an account with an email address.</p><button className={tw("button button-outline")} onClick={() => { void activeClient.auth.signOut(); }}>Sign out</button></div></main>;
     }
+    if (session && passwordRecovery)
+        return <PasswordRecoveryForm client={activeClient} onComplete={() => setPasswordRecovery(false)}/>;
     if (!session)
         return <AuthForm client={activeClient}/>;
     return (<Dashboard client={activeClient} userId={session.user.id} onSignOut={() => { void activeClient.auth.signOut(); }}/>);

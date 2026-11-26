@@ -16,11 +16,13 @@ export function AuthForm({ client }) {
     const [role, setRole] = useState('PRIEST');
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [consent, setConsent] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [notice, setNotice] = useState('');
     const [otpOpen, setOtpOpen] = useState(false);
-    const [otpPurpose, setOtpPurpose] = useState('login');
     const [otpEmail, setOtpEmail] = useState('');
     const [otpCode, setOtpCode] = useState('');
     const [otpError, setOtpError] = useState('');
@@ -29,14 +31,21 @@ export function AuthForm({ client }) {
     const setView = (nextMode) => {
         setMode(nextMode);
         setError('');
+        setNotice('');
     };
 
-    const requestCode = async (targetMode, targetEmail = email) => {
+    const submit = async (event) => {
+        event.preventDefault();
         setError('');
-        const normalizedEmail = targetEmail.trim().toLowerCase();
-        if (targetMode === 'register') {
+        setNotice('');
+        const normalizedEmail = email.trim().toLowerCase();
+        if (mode === 'register') {
             if (name.trim().length < 2) {
                 setError('Enter your full name.');
+                return;
+            }
+            if (password !== confirmPassword) {
+                setError('Passwords do not match.');
                 return;
             }
             if (!consent) {
@@ -47,30 +56,38 @@ export function AuthForm({ client }) {
 
         setLoading(true);
         try {
-            const options = targetMode === 'register'
-                ? {
-                    shouldCreateUser: true,
-                    data: {
-                        full_name: name.trim(),
-                        account_type: role,
-                        privacy_consent: true,
-                        privacy_notice_version: '2026-11-25',
+            if (mode === 'register') {
+                const { data, error: signUpError } = await client.auth.signUp({
+                    email: normalizedEmail,
+                    password,
+                    options: {
+                        data: {
+                            full_name: name.trim(),
+                            account_type: role,
+                            privacy_consent: true,
+                            privacy_notice_version: '2026-11-25',
+                        },
                     },
+                });
+                if (signUpError)
+                    throw signUpError;
+                setEmail(normalizedEmail);
+                if (!data.session) {
+                    setOtpEmail(normalizedEmail);
+                    setOtpCode('');
+                    setOtpError('');
+                    setOtpNotice('');
+                    setOtpOpen(true);
                 }
-                : { shouldCreateUser: false };
-            const { error: requestError } = await client.auth.signInWithOtp({
-                email: normalizedEmail,
-                options,
-            });
-            if (requestError)
-                throw requestError;
-            setEmail(normalizedEmail);
-            setOtpEmail(normalizedEmail);
-            setOtpPurpose(targetMode);
-            setOtpCode('');
-            setOtpError('');
-            setOtpNotice('');
-            setOtpOpen(true);
+            }
+            else {
+                const { error: signInError } = await client.auth.signInWithPassword({
+                    email: normalizedEmail,
+                    password,
+                });
+                if (signInError)
+                    throw signInError;
+            }
         }
         catch (caught) {
             setError(getErrorMessage(caught));
@@ -80,30 +97,14 @@ export function AuthForm({ client }) {
         }
     };
 
-    const submit = (event) => {
-        event.preventDefault();
-        void requestCode(mode);
-    };
-
     const resendCode = async () => {
         setLoading(true);
         setOtpError('');
         setOtpNotice('');
         try {
-            const options = otpPurpose === 'register'
-                ? {
-                    shouldCreateUser: true,
-                    data: {
-                        full_name: name.trim(),
-                        account_type: role,
-                        privacy_consent: true,
-                        privacy_notice_version: '2026-11-25',
-                    },
-                }
-                : { shouldCreateUser: false };
-            const { error: requestError } = await client.auth.signInWithOtp({
+            const { error: requestError } = await client.auth.resend({
+                type: 'signup',
                 email: otpEmail,
-                options,
             });
             if (requestError)
                 throw requestError;
@@ -127,7 +128,7 @@ export function AuthForm({ client }) {
             const { error: verifyError } = await client.auth.verifyOtp({
                 email: otpEmail,
                 token: otpCode,
-                type: 'email',
+                type: 'signup',
             });
             if (verifyError)
                 throw verifyError;
@@ -135,6 +136,31 @@ export function AuthForm({ client }) {
         }
         catch (caught) {
             setOtpError(getErrorMessage(caught));
+        }
+        finally {
+            setLoading(false);
+        }
+    };
+
+    const requestPasswordReset = async () => {
+        setError('');
+        setNotice('');
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!normalizedEmail) {
+            setError('Enter your email address first.');
+            return;
+        }
+        setLoading(true);
+        try {
+            const { error: resetError } = await client.auth.resetPasswordForEmail(normalizedEmail, {
+                redirectTo: window.location.origin,
+            });
+            if (resetError)
+                throw resetError;
+            setNotice('If an account exists for this email, a password reset link has been sent.');
+        }
+        catch (caught) {
+            setError(getErrorMessage(caught));
         }
         finally {
             setLoading(false);
@@ -169,8 +195,8 @@ export function AuthForm({ client }) {
             <h2>{isRegister ? 'Create your account' : 'Sign in to MandirSetu'}</h2>
             <p className={tw("muted auth-intro")}>
               {isRegister
-                ? 'Create an account with your email. We’ll send you a one-time verification code.'
-                : 'Enter your email and we’ll send a one-time sign-in code.'}
+                ? 'Create your account with an email address and password.'
+                : 'Sign in with the email address and password for your account.'}
             </p>
 
             <form onSubmit={submit} className={tw("form-stack")}>
@@ -197,25 +223,40 @@ export function AuthForm({ client }) {
                 <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required/>
               </label>
 
+              <label className={tw("field")}>
+                <span>{isRegister ? 'Password (at least 8 characters)' : 'Password'}</span>
+                <input type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={isRegister ? 8 : undefined}/>
+              </label>
+
+              {isRegister && <label className={tw("field")}>
+                <span>Confirm password</span>
+                <input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8}/>
+              </label>}
+
               {isRegister && (<label className={tw("consent-row")}>
                   <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)}/>
                   <span>I have read the <a href="/privacy.html" target="_blank" rel="noreferrer">privacy notice</a> and consent to the use of my profile information for this service.</span>
                 </label>)}
 
               {error && <p className={tw("form-message error-message")} role="alert">{error}</p>}
+              {notice && <p className={tw("form-message success-message")} role="status">{notice}</p>}
 
               <button type="submit" className={tw("button button-primary full-button")} disabled={loading}>
-                {loading ? 'Sending code…' : isRegister ? 'Send signup code' : 'Send login code'}
+                {loading ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in'}
                 {!loading && <ArrowRight size={17}/>}
               </button>
             </form>
+
+            {!isRegister && <div className={tw("auth-switch")}>
+              <button type="button" className={tw("text-button")} onClick={() => void requestPasswordReset()} disabled={loading}>Forgot password?</button>
+            </div>}
 
             <div className={tw("auth-switch")}>
               {isRegister
                 ? <>Already a member? <button type="button" className={tw("text-button")} onClick={() => setView('login')}>Sign in</button></>
                 : <span>New to MandirSetu? <button type="button" className={tw("text-button")} onClick={() => setView('register')}>Create an account</button></span>}
             </div>
-            <p className={tw("auth-disclaimer")}>Email OTP verifies access to your inbox, not your identity. Manual platform review is not government certification.</p>
+            <p className={tw("auth-disclaimer")}>Email confirmation verifies access to your inbox, not your identity. Manual platform review is not government certification.</p>
           </div>
         </section>
       </main>
